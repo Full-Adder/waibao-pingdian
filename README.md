@@ -236,6 +236,19 @@ Apifox 导入步骤：
 
 前端协议页：`/terms`、`/privacy`、`/report-policy`，无需登录即可访问。
 
+## 持续集成
+
+GitHub Actions 配置见 `.github/workflows/ci.yml`，在 push 到 `main`、PR 和手动触发时运行：
+
+| Job | 内容 | 依赖 |
+| --- | --- | --- |
+| `backend` | `mvn test`（113 个测试） | 服务容器 PostgreSQL 16 + Redis 8 |
+| `frontend` | `npm ci && npm run build`（Nuxt SSR） | Node.js 24 |
+| `admin` | `npm ci && npm run build`（Vite） | Node.js 24 |
+| `contract` | `spec/openapi/openapi.yaml` 校验 | Node.js 24 + Redocly CLI |
+
+部署（CD）尚未接入：待服务器方案确定后，再在同一工作流中增加手动触发的发布任务，服务器密钥统一放 GitHub Secrets，生产环境变量只保存在服务器。
+
 ## 说明
 
 - 本仓库已完成后端 Task 1–12、16（账号核验、公司档案、点评、审核、投诉裁定、通知、看板、安全保留）及 Task 17 验收；前台/后台按 Task 13–15 交付。
