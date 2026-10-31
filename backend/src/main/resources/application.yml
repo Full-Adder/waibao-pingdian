@@ -1,0 +1,183 @@
+spring:
+  application:
+    name: waibao-pingdian
+  config:
+    # 本地开发可从仓库根目录 .env 注入密钥；不存在时忽略。
+    import: optional:file:../.env[.properties]
+  profiles:
+    default: mock
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:waibao_dev}
+    username: ${DB_USER:${USER:waibao}}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 3000
+      validation-timeout: 2000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+  jackson:
+    default-property-inclusion: non_null
+    time-zone: Asia/Shanghai
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: 2s
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    listener:
+      simple:
+        acknowledge-mode: auto
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  error:
+    include-message: never
+    include-stacktrace: never
+
+xxl:
+  job:
+    enabled: ${XXL_JOB_ENABLED:true}
+    admin-addresses: ${XXL_JOB_ADMIN_ADDRESSES:http://localhost:8081/xxl-job-admin}
+    access-token: ${XXL_JOB_ACCESS_TOKEN:waibao_xxl_token}
+    executor:
+      appname: ${XXL_JOB_EXECUTOR_APPNAME:waibao-executor}
+      address: ${XXL_JOB_EXECUTOR_ADDRESS:}
+      ip: ${XXL_JOB_EXECUTOR_IP:}
+      port: ${XXL_JOB_EXECUTOR_PORT:9999}
+      log-path: ${XXL_JOB_LOG_PATH:/tmp/xxl-job-executor}
+      log-retention-days: ${XXL_JOB_LOG_RETENTION_DAYS:30}
+
+providers:
+  mode: ${PROVIDERS_MODE:mock}
+  mock:
+    sms:
+      fixed-code: ${MOCK_SMS_FIXED_CODE:123456}
+      fail-first-attempts: ${MOCK_SMS_FAIL_FIRST_ATTEMPTS:0}
+    realname:
+      fail-id: ${MOCK_REALNAME_FAIL_ID:}
+    ai:
+      publish-confidence: 0.75
+      manual-confidence: 0.50
+      rules-version: rules-v1
+    business-data:
+      per-group-count: 417
+
+storage:
+  root: ${STORAGE_ROOT:storage}
+  master-key: ${STORAGE_MASTER_KEY:}
+  default-ttl-seconds: 300
+
+auth:
+  jwt:
+    secret: ${JWT_SECRET:}
+    user-ttl-minutes: 10080
+    admin-ttl-minutes: 480
+  code:
+    ttl-minutes: ${AUTH_CODE_TTL_MINUTES:5}
+    resend-seconds: ${AUTH_CODE_RESEND_SECONDS:60}
+  register:
+    ip-daily-limit: ${AUTH_REGISTER_IP_DAILY_LIMIT:3}
+
+crypto:
+  data-key: ${CRYPTO_DATA_KEY:}
+  hmac-key: ${CRYPTO_HMAC_KEY:}
+
+realname:
+  max-failures: ${REALNAME_MAX_FAILURES:3}
+  lock-hours: ${REALNAME_LOCK_HOURS:24}
+
+identity:
+  change-cost: ${IDENTITY_CHANGE_COST:60}
+  change-cooldown-days: ${IDENTITY_CHANGE_COOLDOWN_DAYS:90}
+  change-per-year: ${IDENTITY_CHANGE_PER_YEAR:2}
+
+review:
+  edit-window-days: ${REVIEW_EDIT_WINDOW_DAYS:7}
+  max-edits: ${REVIEW_MAX_EDITS:2}
+  withdraw-ban-days: ${REVIEW_WITHDRAW_BAN_DAYS:30}
+  company-cap: ${REVIEW_COMPANY_CAP:3}
+  min-interval-days: ${REVIEW_MIN_INTERVAL_DAYS:90}
+  copy-detect-companies: ${REVIEW_COPY_DETECT_COMPANIES:3}
+  draft-ttl-days: ${REVIEW_DRAFT_TTL_DAYS:7}
+  risk:
+    burst-window-hours: ${REVIEW_RISK_BURST_WINDOW_HOURS:24}
+    burst-threshold: ${REVIEW_RISK_BURST_THRESHOLD:5}
+    signal-ttl-hours: ${REVIEW_RISK_SIGNAL_TTL_HOURS:24}
+
+ranking:
+  algorithm-version: ${RANKING_ALGORITHM_VERSION:ranking-v1}
+  verified-weight: 1.0
+  former-weight: 0.8
+  evidence-bonus: 0.2
+  copy-penalty: 0.5
+  disputed-penalty: 0.5
+  min-sample: ${RANKING_MIN_SAMPLE:3}
+  recommend-percentile: ${RANKING_RECOMMEND_PERCENTILE:0.20}
+  time-decay:
+    enabled: ${RANKING_TIME_DECAY_ENABLED:true}
+    months: ${RANKING_TIME_DECAY_MONTHS:12}
+    weight: ${RANKING_TIME_DECAY_WEIGHT:0.5}
+
+report:
+  auto-manual-threshold: ${REPORT_AUTO_MANUAL_THRESHOLD:5}
+  per-target-24h: ${REPORT_PER_TARGET_24H:1}
+
+complaint:
+  deadline-hours: ${COMPLAINT_DEADLINE_HOURS:48}
+  reminder-hours-before: ${COMPLAINT_REMINDER_HOURS_BEFORE:24}
+  ruling-target-hours: ${COMPLAINT_RULING_TARGET_HOURS:48}
+  same-company-window-days: ${COMPLAINT_SAME_COMPANY_WINDOW_DAYS:7}
+  same-company-threshold: ${COMPLAINT_SAME_COMPANY_THRESHOLD:3}
+  removal-age-days: ${COMPLAINT_REMOVAL_AGE_DAYS:30}
+
+account:
+  age-gate-hours: ${ACCOUNT_AGE_GATE_HOURS:0}
+
+admin:
+  seed:
+    account: ${ADMIN_SEED_ACCOUNT:}
+    password: ${ADMIN_SEED_PASSWORD:}
+    role: ${ADMIN_SEED_ROLE:SUPER_ADMIN}
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  redis:
+    # 统一 key 前缀，避免多环境串用；测试会覆盖为 waibao:test:<runId>:
+    key-prefix: ${REDIS_KEY_PREFIX:waibao:}
+  mq:
+    # true：导入/通知/AI 初审走 RabbitMQ；false：进程内同步执行（测试默认）
+    async: ${APP_MQ_ASYNC:true}
+
+logging:
+  level:
+    com.waibao.pingdian: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{traceId:-}] %logger{36} - %msg%n"

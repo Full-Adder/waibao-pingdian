@@ -1,0 +1,4907 @@
+openapi: 3.1.0
+info:
+  title: 外包点评 API
+  version: 1.0.0
+  description: |
+    外包点评一期接口契约（以实际 Controller 为准同步）。
+    - 统一响应：`{code, message, data, traceId}`，成功 `code=0`。
+    - 分页：`page` 从 1 开始，`size` 最大 100，响应 `data` 为 `{items, page, size, total}`。
+    - 鉴权：用户端 `userBearer`（JWT aud=user），管理端 `adminBearer`（JWT aud=admin）。
+    - 时间：接口按业务时区 `Asia/Shanghai` 输出 ISO-8601 字符串。
+    - 不提供任何删除点评的接口；管理端处置只有通过、折叠、驳回（下架语义由投诉裁定执行）。
+  contact:
+    name: 外包点评
+  license:
+    name: Proprietary
+    url: https://example.invalid/license
+servers:
+  - url: http://localhost:8080
+    description: 本地开发
+tags:
+  - name: 公开
+    description: 游客可访问，无需登录
+  - name: 用户鉴权
+    description: 注册、登录、实名、身份与通知
+  - name: 用户内容
+    description: 在职佐证、点评、举报、投诉举证
+  - name: 管理端-鉴权
+    description: 管理员登录与当前管理员
+  - name: 管理端-审核
+    description: 人工审核队列、批量处置与佐证核验
+  - name: 管理端-投诉
+    description: 投诉工单、举证、裁定、企业回应与黑名单
+  - name: 管理端-公司
+    description: 公司档案、候选池与合并
+  - name: 管理端-用户
+    description: 用户、封禁与贡献值管理
+  - name: 管理端-导入
+    description: 工商批量导入任务
+  - name: 管理端-看板
+    description: 数据看板与指标口径
+  - name: 管理端-反馈与举报
+    description: 反馈工单与举报处置
+  - name: 管理端-审计与合规
+    description: 审计日志与材料访问
+
+paths:
+  /api/health:
+    get:
+      tags: [公开]
+      operationId: getHealth
+      summary: 健康检查
+      description: 数据库正常返回 200，异常返回 503，不返回连接串。
+      security: []
+      responses:
+        '200':
+          description: 服务与数据库正常
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/HealthStatus'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /api/companies/search:
+    get:
+      tags: [公开]
+      operationId: searchCompanies
+      summary: 公司搜索
+      description: 按名称、简称、城市、行业、别名检索；未评价公司同样进入结果；零结果返回空列表；写入 search_log。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Industry'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: visitorId
+          in: query
+          required: false
+          description: 匿名访客标识（也可通过 X-Visitor-Id 请求头传递）
+          schema:
+            type: string
+            maxLength: 64
+        - name: X-Visitor-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            maxLength: 64
+      responses:
+        '200':
+          description: 搜索结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CompanyPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/companies/sitemap:
+    get:
+      tags: [公开]
+      operationId: getCompanySitemap
+      summary: 公司 sitemap 清单
+      description: 仅返回 ACTIVE 且非旧 USCC 的公司，可按城市/行业分片。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Industry'
+      responses:
+        '200':
+          description: sitemap 条目
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/SitemapEntry'
+
+  /api/companies/{uscc}:
+    get:
+      tags: [公开]
+      operationId: getCompany
+      summary: 公司详情
+      description: 公司档案、综合分门槛文案、六维度均分、信息来源与企业回应数；旧 USCC 返回 redirectTo 供前台 301。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+      responses:
+        '200':
+          description: 公司详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CompanyDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/companies/{uscc}/reviews:
+    get:
+      tags: [公开]
+      operationId: listCompanyReviews
+      summary: 公司点评列表
+      description: 仅返回 PUBLISHED / DISPUTED / FOLDED（折叠默认收起），按加权分排序。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 点评列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewPage'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/companies/{uscc}/responses:
+    get:
+      tags: [公开]
+      operationId: listCompanyResponses
+      summary: 已审核通过的企业回应
+      description: 只返回 APPROVED 的企业回应；可选按 reviewId 过滤。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+        - name: reviewId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 企业回应列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/EnterpriseResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [公开]
+      operationId: submitCompanyResponse
+      summary: 企业回应提交
+      description: 经主体核验的企业凭投诉工单号提交 ≤500 字回应；过滤联系方式；审核通过后展示，不计分、不改状态。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnterpriseResponseSubmitRequest'
+      responses:
+        '200':
+          description: 已提交待审核
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status:
+                            type: string
+                            example: PENDING
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/companies/report:
+    post:
+      tags: [用户内容]
+      operationId: reportCompany
+      summary: 用户上报公司
+      description: 命中工商库/别名直接返回公司；未命中只进入 company_candidate 待核验池，不创建公司。
+      security:
+        - userBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyReportRequest'
+      responses:
+        '200':
+          description: 上报结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CompanyReportResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/rankings:
+    get:
+      tags: [公开]
+      operationId: listRankings
+      summary: 双榜列表
+      description: 推荐榜与待改善名单按城市与行业出；只展示样本数、低分集中度、争议率等可核对指标。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Industry'
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RankingType'
+        - name: date
+          in: query
+          required: false
+          description: 快照日期 YYYY-MM-DD，缺省为最近一次
+          schema:
+            type: string
+            format: date
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 榜单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RankingPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/rankings/history:
+    get:
+      tags: [公开]
+      operationId: getRankingHistory
+      summary: 榜单历史快照
+      description: 返回指定日期的算法版本、参数与入榜公司快照。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Industry'
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/RankingType'
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: 历史榜单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RankingPage'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/appeals:
+    post:
+      tags: [公开]
+      operationId: submitEnterpriseAppeal
+      summary: 企业申诉表单
+      description: 上传营业执照与加盖公章申诉函；未通过主体核验不生成工单、不改变点评状态。
+      security: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AppealRequest'
+      responses:
+        '201':
+          description: 已受理，进入主体核验
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ComplaintCreatedResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/feedback:
+    post:
+      tags: [公开]
+      operationId: submitFeedback
+      summary: 帮助与反馈
+      description: 生成工单进入后台，承诺 48 小时内首次响应。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackSubmitRequest'
+      responses:
+        '201':
+          description: 工单已创建
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FeedbackSubmitResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/track/visit:
+    post:
+      tags: [公开]
+      operationId: trackVisit
+      summary: 访问埋点
+      description: 匿名 visitorId + 路径 + UA；不采集任何个人明文信息；同一访客一分钟内同路径去重。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackVisitRequest'
+      responses:
+        '204':
+          description: 已记录（无响应体）
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/auth/sms/send:
+    post:
+      tags: [用户鉴权]
+      operationId: sendSmsCode
+      summary: 发送短信验证码
+      description: 同一手机号 60 秒限 1 次；验证码 5 分钟有效、一次性。Mock 模式固定 123456 并输出服务端日志。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SmsSendRequest'
+      responses:
+        '200':
+          description: 已发送
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SmsSendResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/login:
+    post:
+      tags: [用户鉴权]
+      operationId: login
+      summary: 短信验证码注册/登录
+      description: 注册成功同事务生成固定匿名身份；单设备会话，新登录使旧 token 失效。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/LoginResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/auth/logout:
+    post:
+      tags: [用户鉴权]
+      operationId: logout
+      summary: 退出登录
+      description: 作废当前账号签发的会话。
+      security:
+        - userBearer: []
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/users/me:
+    get:
+      tags: [用户鉴权]
+      operationId: getMe
+      summary: 当前用户
+      security:
+        - userBearer: []
+      responses:
+        '200':
+          description: 用户信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/users/me/realname:
+    post:
+      tags: [用户鉴权]
+      operationId: verifyRealname
+      summary: 身份证二要素核验
+      description: 只存证件号哈希与掩码；连续 3 次失败锁定 24 小时；日志不得出现证件号。
+      security:
+        - userBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RealnameRequest'
+      responses:
+        '200':
+          description: 核验结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RealnameResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/users/me/verifications/{verificationId}/delete-material:
+    post:
+      tags: [用户鉴权]
+      operationId: deleteMyVerificationMaterial
+      summary: 提前删除佐证材料
+      description: 删除原始与脱敏文件，保留核验结论与在职时间段；删除动作留痕。
+      security:
+        - userBearer: []
+      parameters:
+        - name: verificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 删除结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MaterialDeletionResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/users/me/identity:
+    get:
+      tags: [用户鉴权]
+      operationId: getMyIdentity
+      summary: 当前匿名身份
+      description: 返回固定别名、更换次数与下次可更换条件。
+      security:
+        - userBearer: []
+      responses:
+        '200':
+          description: 匿名身份
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/IdentityDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/users/me/identity/change:
+    post:
+      tags: [用户鉴权]
+      operationId: changeIdentity
+      summary: 更换匿名身份
+      description: 60 贡献值 + 90 天冷却 + 自然年 2 次；不满足时 403 并返回差额与剩余天数。历史点评不迁移。
+      security:
+        - userBearer: []
+      responses:
+        '200':
+          description: 更换成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/IdentityChangeResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/users/me/notifications:
+    get:
+      tags: [用户鉴权]
+      operationId: listNotifications
+      summary: 站内通知列表
+      description: 五类时限通知不可退订；返回未读数与列表。
+      security:
+        - userBearer: []
+      parameters:
+        - name: unreadOnly
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 通知列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/NotificationPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/users/me/notifications/{notificationId}/read:
+    post:
+      tags: [用户鉴权]
+      operationId: readNotification
+      summary: 单条已读
+      security:
+        - userBearer: []
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/users/me/notifications/read-all:
+    post:
+      tags: [用户鉴权]
+      operationId: readAllNotifications
+      summary: 全部已读
+      security:
+        - userBearer: []
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/verifications:
+    get:
+      tags: [用户内容]
+      operationId: listMyVerifications
+      summary: 我的在职佐证
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 佐证列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/VerificationPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [用户内容]
+      operationId: submitVerification
+      summary: 提交在职佐证
+      description: 四类材料任选其一，必须填写公司 USCC 与在职年月区间；文件进入私有加密存储并生成脱敏副本。
+      security:
+        - userBearer: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerificationCreateRequest'
+      responses:
+        '200':
+          description: 已提交待审核
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/VerificationItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/verifications/mine:
+    get:
+      tags: [用户内容]
+      operationId: listMyVerificationsAlias
+      summary: 我的在职佐证（兼容别名）
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 佐证列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/VerificationPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/reviews:
+    post:
+      tags: [用户内容]
+      operationId: createReview
+      summary: 创建并提交点评
+      description: 仅已核验用户；总分 1–5 必填，六维度至少 3 项，正文 20–2000 字；同公司同在职时间段仅 1 条。
+      security:
+        - userBearer: []
+      parameters:
+        - name: X-Device-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewUpsertRequest'
+      responses:
+        '201':
+          description: 已创建并进入机器审核
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/reviews/drafts:
+    post:
+      tags: [用户内容]
+      operationId: saveReviewDraft
+      summary: 保存点评草稿
+      description: 草稿允许字段不完整；同一用户同公司同时间段复用草稿。
+      security:
+        - userBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewUpsertRequest'
+      responses:
+        '200':
+          description: 草稿
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/reviews/{reviewId}/submit:
+    post:
+      tags: [用户内容]
+      operationId: submitReview
+      summary: 提交点评草稿进入机器审核
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      responses:
+        '200':
+          description: 已提交
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/reviews/mine:
+    get:
+      tags: [用户内容]
+      operationId: listMyReviews
+      summary: 我的点评
+      description: 按状态分组；显示驳回原因、编辑/撤回/申诉入口与剩余可编辑次数。
+      security:
+        - userBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ReviewStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 我的点评
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/reviews/latest:
+    get:
+      tags: [公开]
+      operationId: listLatestReviews
+      summary: 最新已发布点评
+      description: 首页最新评价流，只返回公开可见评价。
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
+      responses:
+        '200':
+          description: 最新点评
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ReviewItem'
+
+  /api/reviews/{reviewId}:
+    get:
+      tags: [公开]
+      operationId: getReview
+      summary: 点评详情
+      description: 作者可见全部状态；其他用户仅可见公开状态。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      responses:
+        '200':
+          description: 点评详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewItem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [用户内容]
+      operationId: updateReview
+      summary: 编辑点评
+      description: 仅 PUBLISHED 且发布 ≤7 天、最多 2 次；编辑后转 EDITING 重走 AI 初审，期间不计分。
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+        - name: X-Device-Id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewUpsertRequest'
+      responses:
+        '200':
+          description: 已进入编辑重审
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reviews/{reviewId}/withdraw:
+    post:
+      tags: [用户内容]
+      operationId: withdrawReview
+      summary: 撤回点评
+      description: PUBLISHED 状态随时可撤回，立即移出评分与索引；30 天内不得对同一公司再发。
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reviews/{reviewId}/appeal:
+    post:
+      tags: [用户内容]
+      operationId: appealReview
+      summary: 点评申诉
+      description: 仅非红线驳回可申诉一次，申诉后转 PENDING_MANUAL。
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppealReviewRequest'
+      responses:
+        '200':
+          description: 申诉已受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/reports:
+    post:
+      tags: [用户内容]
+      operationId: submitReport
+      summary: 举报点评或公司
+      description: 结构化原因码 + 说明；同一账号对同一对象 24 小时限报 1 次（429 返回可举报时间）。
+      security:
+        - userBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportCreateRequest'
+      responses:
+        '201':
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReportSubmitView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/complaints/mine/{reviewId}:
+    get:
+      tags: [用户内容]
+      operationId: getMyComplaint
+      summary: 作者侧投诉工单与倒计时
+      description: 返回该评价当前工单状态、双方举证情况与截止倒计时。
+      security:
+        - userBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      responses:
+        '200':
+          description: 我的投诉
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MyComplaintView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/complaints/{complaintId}/evidence:
+    post:
+      tags: [用户内容]
+      operationId: uploadUserComplaintEvidence
+      summary: 作者举证
+      description: 已实名用户向本人评价的投诉工单上传证据；截止后视为弃权。
+      security:
+        - userBearer: []
+      parameters:
+        - name: complaintId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserEvidenceRequest'
+      responses:
+        '200':
+          description: 举证结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ComplaintEvidence'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/auth/login:
+    post:
+      tags: [管理端-鉴权]
+      operationId: adminLogin
+      summary: 管理员登录
+      description: 账号 + 密码，返回 JWT（aud=admin）；角色仅 CONTENT_ADMIN / SUPER_ADMIN。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminLoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminLoginResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/admin/auth/me:
+    get:
+      tags: [管理端-鉴权]
+      operationId: getAdminMe
+      summary: 当前管理员
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: 管理员信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/admin/reviews/queue:
+    get:
+      tags: [管理端-审核]
+      operationId: listReviewQueue
+      summary: 人工审核队列
+      description: 仅三类进入：低置信度、含具体指控、被投诉；另有复制检测、风险、申诉来源；按等待时长排序。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [AI_LOW_CONFIDENCE, SPECIFIC_CLAIM, REPORTED, COPY_DETECTED, RISK_FLAGGED, APPEAL]
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 队列
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewQueuePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/reviews/queue/{reviewId}:
+    get:
+      tags: [管理端-审核]
+      operationId: getReviewQueueDetail
+      summary: 后台点评详情
+      description: 原文、AI 判定、佐证材料入口、状态迁移审计。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      responses:
+        '200':
+          description: 点评详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewQueueDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/reviews/{reviewId}/approve:
+    post:
+      tags: [管理端-审核]
+      operationId: approveReview
+      summary: 通过点评
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewDispositionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/reviews/{reviewId}/fold:
+    post:
+      tags: [管理端-审核]
+      operationId: foldReview
+      summary: 折叠点评
+      description: 折叠后仍公开可见但默认收起、不索引、不计分。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewDispositionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/reviews/{reviewId}/reject:
+    post:
+      tags: [管理端-审核]
+      operationId: rejectReview
+      summary: 驳回点评
+      description: 驳回强制原因码与理由；不提供删除接口。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/ReviewIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewDispositionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/reviews/batch:
+    post:
+      tags: [管理端-审核]
+      operationId: batchDispositionReviews
+      summary: 批量处置点评
+      description: 逐条执行，部分失败不回滚已成功项。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewBatchDispositionRequest'
+      responses:
+        '200':
+          description: 批量结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReviewBatchDispositionResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/reviews/reason-templates:
+    get:
+      tags: [管理端-审核]
+      operationId: getReviewReasonTemplates
+      summary: 审核理由模板
+      security:
+        - adminBearer: []
+      responses:
+        '200':
+          description: 通过 / 折叠 / 驳回理由模板
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReasonTemplateBundle'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/verifications:
+    get:
+      tags: [管理端-审核]
+      operationId: listVerifications
+      summary: 佐证核验列表
+      security:
+        - adminBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/VerificationStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 核验列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/VerificationPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/verifications/{verificationId}/approve:
+    post:
+      tags: [管理端-审核]
+      operationId: approveVerification
+      summary: 核验通过
+      description: 通过后立即生效发评权限，并发放 +50 贡献值。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: verificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/verifications/{verificationId}/reject:
+    post:
+      tags: [管理端-审核]
+      operationId: rejectVerification
+      summary: 核验驳回
+      security:
+        - adminBearer: []
+      parameters:
+        - name: verificationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerificationRejectRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/complaints:
+    get:
+      tags: [管理端-投诉]
+      operationId: listComplaints
+      summary: 投诉工单列表
+      security:
+        - adminBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ComplaintStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 工单列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ComplaintPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/complaints/{complaintId}:
+    get:
+      tags: [管理端-投诉]
+      operationId: getComplaint
+      summary: 投诉工单详情
+      description: 含双方证据、分级、裁定字段、材料入口与企业回应。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: complaintId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 工单详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ComplaintDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/complaints/{complaintId}/verify:
+    post:
+      tags: [管理端-投诉]
+      operationId: verifyComplaint
+      summary: 投诉主体核验
+      description: 核对 USCC 与档案一致；通过后点评转 DISPUTED、降权、移榜，启动 48 小时举证倒计时。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: complaintId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComplaintVerifyRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/complaints/{complaintId}/evidence:
+    post:
+      tags: [管理端-投诉]
+      operationId: uploadAdminComplaintEvidence
+      summary: 管理员代传举证材料
+      security:
+        - adminBearer: []
+      parameters:
+        - name: complaintId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ComplaintEvidenceRequest'
+      responses:
+        '200':
+          description: 举证材料
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ComplaintEvidence'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/complaints/{complaintId}/ruling:
+    post:
+      tags: [管理端-投诉]
+      operationId: ruleComplaint
+      summary: 裁定投诉
+      description: 记录证据分级、结论、理由、材料编号与条款；需双人复核时返回 202 pendingDualReview=true。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: complaintId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RulingRequest'
+      responses:
+        '200':
+          description: 裁定完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RulingResult'
+        '202':
+          description: 已提交，等待另一名超级管理员复核
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/RulingResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/complaints/blocklist:
+    post:
+      tags: [管理端-投诉]
+      operationId: addComplaintBlocklist
+      summary: 投诉黑名单（超管）
+      description: 仅超级管理员可维护；加入后该企业申诉被拒绝。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ComplaintBlocklistRequest'
+      responses:
+        '200':
+          description: 已加入黑名单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                            format: uuid
+                          uscc:
+                            type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/responses:
+    get:
+      tags: [管理端-投诉]
+      operationId: listAdminResponses
+      summary: 企业回应列表
+      security:
+        - adminBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EnterpriseResponseStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 企业回应列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminResponsePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/responses/{responseId}/approve:
+    post:
+      tags: [管理端-投诉]
+      operationId: approveResponse
+      summary: 通过企业回应
+      security:
+        - adminBearer: []
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/responses/{responseId}/reject:
+    post:
+      tags: [管理端-投诉]
+      operationId: rejectResponse
+      summary: 驳回企业回应
+      security:
+        - adminBearer: []
+      parameters:
+        - name: responseId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResponseRejectRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/companies:
+    get:
+      tags: [管理端-公司]
+      operationId: listAdminCompanies
+      summary: 公司档案列表
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Keyword'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CompanyStatus'
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Industry'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 公司列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CompanyPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/companies/{uscc}:
+    get:
+      tags: [管理端-公司]
+      operationId: getAdminCompany
+      summary: 管理端公司详情
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+      responses:
+        '200':
+          description: 公司详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CompanyDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [管理端-公司]
+      operationId: updateCompany
+      summary: 编辑公司档案
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyUpdateRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [管理端-公司]
+      operationId: patchCompany
+      summary: 局部编辑公司档案
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/UsccPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompanyUpdateRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/companies/merge:
+    post:
+      tags: [管理端-公司]
+      operationId: mergeCompanies
+      summary: 合并公司
+      description: 迁移点评、核验与别名到主档；旧 USCC 写 uscc_redirect 并 301；sitemap 剔除；重算两家聚合分。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergeCompanyRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/companies/{sourceUscc}/merge-into/{targetUscc}:
+    post:
+      tags: [管理端-公司]
+      operationId: mergeCompanyInto
+      summary: 合并公司（路径参数别名）
+      security:
+        - adminBearer: []
+      parameters:
+        - name: sourceUscc
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 18
+            maxLength: 18
+        - name: targetUscc
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 18
+            maxLength: 18
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergePathRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/company-candidates:
+    get:
+      tags: [管理端-公司]
+      operationId: listCompanyCandidates
+      summary: 待核验公司候选池
+      security:
+        - adminBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/CandidateStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 候选列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CompanyCandidatePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/company-candidates/{candidateId}/match:
+    post:
+      tags: [管理端-公司]
+      operationId: matchCompanyCandidate
+      summary: 候选匹配绑定
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/CandidateIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CandidateResolveRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/company-candidates/{candidateId}/create:
+    post:
+      tags: [管理端-公司]
+      operationId: createCompanyFromCandidate
+      summary: 候选补录为公司
+      description: 按工商数据补录（source=MANUAL）；返回新建/命中的 USCC。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/CandidateIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CandidateResolveRequest'
+      responses:
+        '200':
+          description: 公司 USCC
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: string
+                        minLength: 18
+                        maxLength: 18
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/company-candidates/{candidateId}/reject:
+    post:
+      tags: [管理端-公司]
+      operationId: rejectCompanyCandidate
+      summary: 驳回候选
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/CandidateIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CandidateResolveRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/company-candidates/{candidateId}/resolve:
+    post:
+      tags: [管理端-公司]
+      operationId: resolveCompanyCandidate
+      summary: 处理公司候选
+      description: 匹配绑定（MATCH）/ 按工商数据补录（CREATE，source=MANUAL）/ 驳回（REJECT）；全部留痕。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/CandidateIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CandidateResolveRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/users:
+    get:
+      tags: [管理端-用户]
+      operationId: listUsers
+      summary: 用户列表
+      security:
+        - adminBearer: []
+      parameters:
+        - name: keyword
+          in: query
+          required: false
+          description: 手机号或匿名别名关键词
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/UserStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 用户列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminUserPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/users/{userId}:
+    get:
+      tags: [管理端-用户]
+      operationId: getAdminUser
+      summary: 用户详情
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: 用户详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AdminUserDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/users/{userId}/ban:
+    post:
+      tags: [管理端-用户]
+      operationId: banUser
+      summary: 封禁 / 解封用户（超管）
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BanUserRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/users/{userId}/contribution:
+    post:
+      tags: [管理端-用户]
+      operationId: adjustContribution
+      summary: 调整贡献值
+      description: 写入 contribution_ledger，幂等约束 user_id + reason + ref_id。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContributionAdjustRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/imports:
+    get:
+      tags: [管理端-导入]
+      operationId: listImportJobs
+      summary: 导入任务列表
+      description: 路径 /api/admin/imports 与 /api/admin/import-jobs 等价。
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ImportJobPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [管理端-导入]
+      operationId: createImportJob
+      summary: 触发工商导入
+      description: 按城市 + 行业分页拉取、USCC upsert；同日重复执行幂等。异步执行，返回任务用于轮询。
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportCreateRequest'
+      responses:
+        '202':
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ImportJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/imports/{jobId}:
+    get:
+      tags: [管理端-导入]
+      operationId: getImportJob
+      summary: 导入任务详情
+      security:
+        - adminBearer: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 任务详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ImportJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/import-jobs:
+    get:
+      tags: [管理端-导入]
+      operationId: listImportJobsAlias
+      summary: 导入任务列表（兼容别名）
+      security:
+        - adminBearer: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 任务列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ImportJobPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [管理端-导入]
+      operationId: createImportJobAlias
+      summary: 触发工商导入（兼容别名）
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportCreateRequest'
+      responses:
+        '202':
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ImportJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/import-jobs/{jobId}:
+    get:
+      tags: [管理端-导入]
+      operationId: getImportJobAlias
+      summary: 导入任务详情（兼容别名）
+      security:
+        - adminBearer: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 任务详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ImportJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/dashboard:
+    get:
+      tags: [管理端-看板]
+      operationId: getDashboard
+      summary: 数据看板
+      description: 14 项指标 + 漏斗 + 三条健康红线，附口径说明与时间窗口。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/City'
+        - $ref: '#/components/parameters/Industry'
+        - name: refresh
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: 看板数据
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DashboardResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/feedback:
+    get:
+      tags: [管理端-反馈与举报]
+      operationId: listAdminFeedback
+      summary: 反馈工单列表
+      security:
+        - adminBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/FeedbackStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 反馈列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FeedbackPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/feedback/{ticketId}/reply:
+    post:
+      tags: [管理端-反馈与举报]
+      operationId: replyFeedback
+      summary: 回复反馈工单
+      security:
+        - adminBearer: []
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackReplyRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/admin/reports:
+    get:
+      tags: [管理端-反馈与举报]
+      operationId: listAdminReports
+      summary: 举报处置列表
+      security:
+        - adminBearer: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ReportStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 举报列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ReportPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/reports/{reportId}/resolve:
+    post:
+      tags: [管理端-反馈与举报]
+      operationId: resolveReport
+      summary: 处置举报
+      description: result 与 status 二选一（VALID / INVALID / HANDLED）。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportResolveRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkEmpty'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/admin/audit-logs:
+    get:
+      tags: [管理端-审计与合规]
+      operationId: listAuditLogs
+      summary: 审计日志查询（超管）
+      security:
+        - adminBearer: []
+      parameters:
+        - name: actorId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: targetType
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: targetId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: 审计日志
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuditLogPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/materials/{type}/{id}/url:
+    get:
+      tags: [管理端-审计与合规]
+      operationId: getMaterialSignedUrl
+      summary: 生成材料签名 URL
+      description: 仅内容管理员在核验/投诉举证场景可读；必须携带工单号；签名 URL 5 分钟有效；写审计。
+      security:
+        - adminBearer: []
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [VERIFICATION, REVIEW_EVIDENCE, COMPLAINT_EVIDENCE, COMPLAINT, COMPLAINT_LICENSE, COMPLAINT_LETTER]
+        - name: id
+          in: path
+          required: true
+          description: 材料实体 id（核验记录 id / 点评 id / 投诉举证 id / 投诉 id）
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/TicketId'
+      responses:
+        '200':
+          description: 签名 URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/MaterialUrlResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    userBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 用户 JWT，aud=user
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 管理端 JWT，aud=admin
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 页码，从 1 开始
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 每页条数，最大 100
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Keyword:
+      name: keyword
+      in: query
+      required: false
+      description: 关键词
+      schema:
+        type: string
+        maxLength: 100
+    City:
+      name: city
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [北京, 上海, 深圳, 杭州, 广州, 成都]
+    Industry:
+      name: industry
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [IT人力外包, IT项目外包]
+    UsccPath:
+      name: uscc
+      in: path
+      required: true
+      description: 统一社会信用代码（18 位）
+      schema:
+        type: string
+        minLength: 18
+        maxLength: 18
+    ReviewIdPath:
+      name: reviewId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserIdPath:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CandidateIdPath:
+      name: candidateId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TicketId:
+      name: ticketId
+      in: query
+      required: true
+      description: 工单号（材料读取必填，需与材料实体匹配）
+      schema:
+        type: string
+        maxLength: 64
+
+  responses:
+    OkEmpty:
+      description: 操作成功
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiResponse'
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: 未登录或登录已失效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: 无权限，或业务资格不足
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: 资源冲突（重复投诉、重复点评、状态非法迁移等）
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: 触发限频，返回剩余等待秒数或可再次举报时间
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: 服务或数据库不可用
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ApiResponse:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code:
+          type: integer
+          description: 业务码，0 为成功
+          example: 0
+        message:
+          type: string
+          example: OK
+        data:
+          description: 业务数据，可为对象、数组或 null
+        traceId:
+          type: string
+          description: 请求链路标识，与响应头 X-Trace-Id 一致
+    ErrorResponse:
+      type: object
+      required: [code, message, traceId]
+      properties:
+        code:
+          type: integer
+          description: 业务错误码
+          example: 403
+        message:
+          type: string
+          example: 无权限执行该操作
+        data:
+          type: [object, "null"]
+        traceId:
+          type: string
+
+    HealthStatus:
+      type: object
+      required: [status, database]
+      properties:
+        status:
+          type: string
+          enum: [UP, DEGRADED]
+        database:
+          type: string
+          enum: [UP, DOWN]
+
+    ReviewStatus:
+      type: string
+      description: 点评 10 状态
+      enum: [DRAFT, MACHINE_REVIEWING, PENDING_MANUAL, PUBLISHED, EDITING, WITHDRAWN, DISPUTED, FOLDED, REJECTED, REMOVED]
+    VerificationBadge:
+      type: string
+      enum: [CURRENT, FORMER]
+      description: CURRENT=在职中，FORMER=曾在职
+    DimensionCode:
+      type: string
+      enum: [SALARY, WORK_REALITY, CONTRACT, PROJECT_QUALITY, MANAGEMENT, RECOMMEND]
+    CompanySource:
+      type: string
+      enum: [BUSINESS_API, USER_REPORT, MANUAL]
+    CompanyStatus:
+      type: string
+      enum: [ACTIVE, MERGED, OFFLINE]
+    RealnameStatus:
+      type: string
+      enum: [UNVERIFIED, PENDING, VERIFIED]
+    UserStatus:
+      type: string
+      enum: [ACTIVE, BANNED, DELETED]
+    AdminStatus:
+      type: string
+      enum: [ACTIVE, DISABLED]
+    IdentityStatus:
+      type: string
+      enum: [ACTIVE, RETIRED]
+    ProofType:
+      type: string
+      enum: [LABOR_CONTRACT, BADGE, PAYROLL, COMPANY_EMAIL]
+    VerificationStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED]
+    MaterialStatus:
+      type: string
+      enum: [ACTIVE, DELETED, PENDING_DELETE]
+    EvidenceType:
+      type: string
+      enum: [LABOR_CONTRACT, BADGE, PAYROLL, COMPANY_EMAIL, PAYSLIP, CHAT_RECORD, OTHER]
+    EvidenceGrade:
+      type: string
+      enum: [A, B, C, NONE]
+    AdminRole:
+      type: string
+      enum: [CONTENT_ADMIN, SUPER_ADMIN]
+    RankingType:
+      type: string
+      enum: [RECOMMEND, IMPROVE]
+    ReportTargetType:
+      type: string
+      enum: [REVIEW, COMPANY]
+    ReportReasonCode:
+      type: string
+      description: 举报原因码
+      enum: [FALSE_INFO, ABUSIVE, ADVERTISING, PRIVACY, SPAM, OTHER]
+    ReportStatus:
+      type: string
+      enum: [PENDING, VALID, INVALID, HANDLED]
+    ReviewRejectReasonCode:
+      type: string
+      enum: [INSUFFICIENT_EVIDENCE, FALSE_CLAIM, ABUSIVE_LANGUAGE, ADVERTISING, PRIVACY, OTHER]
+    VerificationRejectReasonCode:
+      type: string
+      enum: [MATERIAL_BLURRY, COMPANY_MISMATCH, PERIOD_INVALID, IDENTITY_MISMATCH, OTHER]
+    NotificationType:
+      type: string
+      enum: [DISPUTE_STARTED, EVIDENCE_REMINDER, RULING_RESULT, VERIFICATION_REJECTED, APPEAL_RESULT]
+    NotificationChannel:
+      type: string
+      enum: [INAPP, SMS, BOTH]
+    ComplaintStatus:
+      type: string
+      enum: [PENDING_VERIFY, REJECTED, EVIDENCE_COLLECTING, PENDING_RULING, RULED_USER_WIN, RULED_COMPANY_WIN, RULED_INSUFFICIENT]
+    ComplaintResult:
+      type: string
+      enum: [USER_WIN, COMPANY_WIN, INSUFFICIENT]
+    EnterpriseResponseStatus:
+      type: string
+      enum: [PENDING, APPROVED, REJECTED]
+    ImportJobStatus:
+      type: string
+      enum: [RUNNING, SUCCESS, PARTIAL, FAILED]
+    ImportTriggerType:
+      type: string
+      enum: [MANUAL, SCHEDULE]
+    CandidateStatus:
+      type: string
+      enum: [PENDING, MATCHED, CREATED, REJECTED]
+    FeedbackCategory:
+      type: string
+      enum: [ACCOUNT, VERIFICATION, APPEAL, REVIEW, OTHER]
+    FeedbackStatus:
+      type: string
+      enum: [PENDING, REPLIED, CLOSED]
+    ContributionReason:
+      type: string
+      enum: [VERIFICATION, REVIEW, FIRST_REVIEW_BONUS, VALID_REPORT, IDENTITY_CHANGE, ADMIN_ADJUST]
+
+    PageMeta:
+      type: object
+      required: [page, size, total]
+      properties:
+        page:
+          type: integer
+        size:
+          type: integer
+        total:
+          type: integer
+          format: int64
+
+    SitemapEntry:
+      type: object
+      required: [uscc, name]
+      properties:
+        uscc:
+          type: string
+        name:
+          type: string
+        updatedAt:
+          type: [string, "null"]
+          format: date-time
+
+    CompanySummary:
+      type: object
+      required: [uscc, name]
+      properties:
+        uscc:
+          type: string
+        name:
+          type: string
+        shortName:
+          type: [string, "null"]
+        city:
+          type: [string, "null"]
+        industry:
+          type: [string, "null"]
+        companyType:
+          type: [string, "null"]
+        source:
+          $ref: '#/components/schemas/CompanySource'
+        reviewCount:
+          type: integer
+        avgScore:
+          type: [number, "null"]
+        scoreVisible:
+          type: boolean
+        hasReviews:
+          type: boolean
+    CompanyPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CompanySummary'
+
+    DimensionScore:
+      type: object
+      required: [code]
+      properties:
+        code:
+          $ref: '#/components/schemas/DimensionCode'
+        average:
+          type: [number, "null"]
+          description: 样本不足 3 条时为 null
+        sampleCount:
+          type: integer
+        enoughSample:
+          type: boolean
+
+    CompanyDetail:
+      type: object
+      required: [uscc]
+      properties:
+        uscc:
+          type: string
+        name:
+          type: [string, "null"]
+        shortName:
+          type: [string, "null"]
+        city:
+          type: [string, "null"]
+        industry:
+          type: [string, "null"]
+        companyType:
+          type: [string, "null"]
+        source:
+          $ref: '#/components/schemas/CompanySource'
+        sourceLabel:
+          type: [string, "null"]
+          description: 信息来源展示文案
+        status:
+          $ref: '#/components/schemas/CompanyStatus'
+        reviewCount:
+          type: integer
+        avgScore:
+          type: [number, "null"]
+        scoreVisible:
+          type: boolean
+        hasReviews:
+          type: boolean
+        scoreNote:
+          type: [string, "null"]
+          description: 如「评价不足，暂不评分」
+        aliases:
+          type: array
+          items:
+            type: string
+        dimensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DimensionScore'
+        responseCount:
+          type: integer
+          description: 已审核通过的企业回应数
+        redirectTo:
+          type: [string, "null"]
+          description: 旧 USCC 的主档 USCC，前台据此 301
+
+    CompanyReportRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 64
+        industry:
+          type: string
+          maxLength: 64
+    CompanyReportResult:
+      type: object
+      properties:
+        matched:
+          type: boolean
+        pending:
+          type: boolean
+        company:
+          $ref: '#/components/schemas/CompanySummary'
+        candidateId:
+          type: [string, "null"]
+          format: uuid
+
+    ReviewDimension:
+      type: object
+      required: [code, score]
+      properties:
+        code:
+          $ref: '#/components/schemas/DimensionCode'
+        score:
+          type: integer
+          minimum: 1
+          maximum: 5
+
+    ReviewEvidence:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/EvidenceType'
+        materialStatus:
+          $ref: '#/components/schemas/MaterialStatus'
+        maskedAt:
+          type: [string, "null"]
+          format: date-time
+
+    ReviewItem:
+      type: object
+      required: [id, uscc, totalScore, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        uscc:
+          type: string
+        companyName:
+          type: [string, "null"]
+        identityAlias:
+          type: [string, "null"]
+          description: 发布时匿名身份快照，如「匿名·K7F2」
+        verificationBadge:
+          oneOf:
+            - $ref: '#/components/schemas/VerificationBadge'
+            - type: "null"
+        totalScore:
+          type: integer
+          minimum: 1
+          maximum: 5
+        content:
+          type: string
+        dimensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewDimension'
+        tags:
+          type: array
+          items:
+            type: string
+        periodStart:
+          type: [string, "null"]
+        periodEnd:
+          type: [string, "null"]
+        city:
+          type: [string, "null"]
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewEvidence'
+        status:
+          $ref: '#/components/schemas/ReviewStatus'
+        aiConfidence:
+          type: [number, "null"]
+        aiFlags:
+          type: array
+          items:
+            type: string
+        aiRulesVersion:
+          type: [string, "null"]
+        publishedAt:
+          type: [string, "null"]
+          format: date-time
+        editDeadline:
+          type: [string, "null"]
+          format: date-time
+        editCount:
+          type: integer
+        disputeDeadline:
+          type: [string, "null"]
+          format: date-time
+        everDisputed:
+          type: boolean
+        rejectReasonCode:
+          type: [string, "null"]
+        rejectMessage:
+          type: [string, "null"]
+        rejectRuleVersion:
+          type: [string, "null"]
+        withdrawnAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: [string, "null"]
+          format: date-time
+        collapsed:
+          type: boolean
+        collapseNote:
+          type: [string, "null"]
+        disputed:
+          type: boolean
+        remainingEdits:
+          type: integer
+        canAppeal:
+          type: boolean
+        editable:
+          type: boolean
+        enterpriseResponse:
+          type: [object, "null"]
+          additionalProperties: true
+
+    ReviewPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewItem'
+
+    ReviewUpsertRequest:
+      type: object
+      properties:
+        id:
+          type: [string, "null"]
+          format: uuid
+          description: 草稿更新时的点评 id
+        uscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        periodStart:
+          type: string
+          description: 在职起始月（YYYY-MM）
+          pattern: '^\d{4}-\d{2}$'
+        periodEnd:
+          type: string
+          description: 在职结束月（YYYY-MM）
+          pattern: '^\d{4}-\d{2}$'
+        totalScore:
+          type: integer
+          minimum: 1
+          maximum: 5
+        content:
+          type: string
+          minLength: 20
+          maxLength: 2000
+        dimensions:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/ReviewDimension'
+        evidenceFileKey:
+          type: string
+        evidenceFileKeys:
+          type: array
+          items:
+            type: string
+        tags:
+          type: object
+          additionalProperties: true
+          description: 模糊身份标签（外包类型/在职时间段/城市/项目类型），禁止具体项目名
+
+    AppealReviewRequest:
+      type: object
+      properties:
+        statement:
+          type: [string, "null"]
+          maxLength: 500
+
+    UserProfile:
+      type: object
+      required: [id, realnameStatus, userState]
+      properties:
+        id:
+          type: string
+          format: uuid
+        phone:
+          type: [string, "null"]
+          description: 已登录用户手机号（掩码/脱敏展示由前端处理）
+        realnameStatus:
+          $ref: '#/components/schemas/RealnameStatus'
+        userState:
+          type: string
+          enum: [GUEST, REGISTERED, REALNAME_VERIFIED, VERIFIED]
+        contributionScore:
+          type: integer
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        identity:
+          $ref: '#/components/schemas/IdentityInfo'
+        createdAt:
+          type: string
+          format: date-time
+
+    SmsSendRequest:
+      type: object
+      required: [phone, scene]
+      properties:
+        phone:
+          type: string
+          pattern: '^1[3-9]\d{9}$'
+        scene:
+          type: string
+          enum: [LOGIN, REGISTER, VERIFICATION_REJECTED]
+    SmsSendResult:
+      type: object
+      required: [resendAfterSeconds]
+      properties:
+        resendAfterSeconds:
+          type: integer
+          description: 可再次发送的等待秒数
+        expiresInSeconds:
+          type: integer
+
+    LoginRequest:
+      type: object
+      required: [phone, code]
+      properties:
+        phone:
+          type: string
+          pattern: '^1[3-9]\d{9}$'
+        code:
+          type: string
+          minLength: 6
+          maxLength: 6
+        acceptedTerms:
+          type: boolean
+          description: 必须勾选用户协议与隐私政策
+    LoginResult:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    AdminLoginRequest:
+      type: object
+      required: [account, password]
+      properties:
+        account:
+          type: string
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+    AdminLoginResult:
+      type: object
+      required: [token, role]
+      properties:
+        token:
+          type: string
+        role:
+          $ref: '#/components/schemas/AdminRole'
+        expiresAt:
+          type: string
+          format: date-time
+    AdminProfile:
+      type: object
+      required: [id, account, role, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account:
+          type: string
+        role:
+          $ref: '#/components/schemas/AdminRole'
+        status:
+          $ref: '#/components/schemas/AdminStatus'
+        lastLoginAt:
+          type: [string, "null"]
+          format: date-time
+
+    RealnameRequest:
+      type: object
+      required: [name, idNumber]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 32
+        idNumber:
+          type: string
+          minLength: 18
+          maxLength: 18
+    RealnameResult:
+      type: object
+      required: [success, realnameStatus]
+      properties:
+        success:
+          type: boolean
+        realnameStatus:
+          $ref: '#/components/schemas/RealnameStatus'
+        failCount:
+          type: integer
+        lockedUntil:
+          type: [string, "null"]
+          format: date-time
+        reasonCode:
+          type: [string, "null"]
+        idMasked:
+          type: [string, "null"]
+
+    IdentityInfo:
+      type: object
+      required: [alias, status]
+      properties:
+        alias:
+          type: string
+          example: 匿名·K7F2
+        status:
+          $ref: '#/components/schemas/IdentityStatus'
+    IdentityDetail:
+      type: object
+      required: [alias, status]
+      properties:
+        alias:
+          type: string
+          example: 匿名·K7F2
+        status:
+          $ref: '#/components/schemas/IdentityStatus'
+        changeCount:
+          type: integer
+        changeCost:
+          type: integer
+          description: 默认 60
+        cooldownDays:
+          type: integer
+          description: 默认 90
+        nextChangeAllowedAt:
+          type: [string, "null"]
+          format: date-time
+        insufficientPoints:
+          type: integer
+          description: 贡献值差额，0 表示满足
+        remainingCooldownDays:
+          type: integer
+        remainingChangesThisYear:
+          type: integer
+        canChange:
+          type: boolean
+    IdentityChangeResult:
+      type: object
+      required: [identity]
+      properties:
+        identity:
+          $ref: '#/components/schemas/IdentityDetail'
+        remainingChangesThisYear:
+          type: integer
+
+    NotificationItem:
+      type: object
+      required: [id, type, title, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/NotificationType'
+        title:
+          type: string
+        body:
+          type: string
+        channel:
+          $ref: '#/components/schemas/NotificationChannel'
+        readAt:
+          type: [string, "null"]
+          format: date-time
+        refType:
+          type: [string, "null"]
+        refId:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+    NotificationPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            unreadCount:
+              type: integer
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/NotificationItem'
+
+    VerificationCreateRequest:
+      type: object
+      required: [proofType, companyUscc, periodStart, periodEnd, file]
+      properties:
+        proofType:
+          $ref: '#/components/schemas/ProofType'
+        companyUscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        periodStart:
+          type: string
+          description: 在职起始月（YYYY-MM）
+          pattern: '^\d{4}-\d{2}$'
+        periodEnd:
+          type: string
+          description: 在职结束月（YYYY-MM）
+          pattern: '^\d{4}-\d{2}$'
+        file:
+          type: string
+          format: binary
+    VerificationItem:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        proofType:
+          $ref: '#/components/schemas/ProofType'
+        companyUscc:
+          type: string
+        companyName:
+          type: [string, "null"]
+        periodStart:
+          type: [string, "null"]
+          format: date
+        periodEnd:
+          type: [string, "null"]
+          format: date
+        badge:
+          oneOf:
+            - $ref: '#/components/schemas/VerificationBadge'
+            - type: "null"
+        status:
+          $ref: '#/components/schemas/VerificationStatus'
+        rejectReasonCode:
+          type: [string, "null"]
+        rejectNote:
+          type: [string, "null"]
+        materialStatus:
+          $ref: '#/components/schemas/MaterialStatus'
+        createdAt:
+          type: string
+          format: date-time
+        reviewedAt:
+          type: [string, "null"]
+          format: date-time
+    VerificationPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/VerificationItem'
+    VerificationRejectRequest:
+      type: object
+      required: [reasonCode]
+      properties:
+        reasonCode:
+          $ref: '#/components/schemas/VerificationRejectReasonCode'
+        note:
+          type: string
+          maxLength: 200
+    MaterialDeletionResult:
+      type: object
+      properties:
+        verificationId:
+          type: string
+          format: uuid
+        materialStatus:
+          $ref: '#/components/schemas/MaterialStatus'
+        materialDeletedAt:
+          type: [string, "null"]
+          format: date-time
+
+    ReviewQueueItem:
+      type: object
+      required: [reviewId]
+      properties:
+        reviewId:
+          type: string
+          format: uuid
+        uscc:
+          type: string
+        companyName:
+          type: [string, "null"]
+        identityAlias:
+          type: [string, "null"]
+        totalScore:
+          type: integer
+        dimensions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewDimension'
+        content:
+          type: string
+        hasEvidence:
+          type: boolean
+        aiFlags:
+          type: array
+          items:
+            type: string
+        aiConfidence:
+          type: [number, "null"]
+        rulesVersion:
+          type: [string, "null"]
+        source:
+          type: string
+          enum: [AI_LOW_CONFIDENCE, SPECIFIC_CLAIM, REPORTED, COPY_DETECTED, RISK_FLAGGED, APPEAL]
+        enteredQueueAt:
+          type: [string, "null"]
+          format: date-time
+        waitingHours:
+          type: integer
+        overdue:
+          type: boolean
+        noAppeal:
+          type: boolean
+        canAppeal:
+          type: boolean
+    ReviewQueuePage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewQueueItem'
+    ReviewQueueDetail:
+      allOf:
+        - $ref: '#/components/schemas/ReviewQueueItem'
+        - type: object
+          properties:
+            status:
+              $ref: '#/components/schemas/ReviewStatus'
+            auditHistory:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewAudit'
+            materials:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewEvidenceMaterial'
+    ReviewAudit:
+      type: object
+      properties:
+        stage:
+          type: string
+        action:
+          type: string
+        fromStatus:
+          type: string
+        toStatus:
+          type: string
+        actorType:
+          type: string
+        actorId:
+          type: [string, "null"]
+          format: uuid
+        reasonCode:
+          type: [string, "null"]
+        detail:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+    ReviewEvidenceMaterial:
+      type: object
+      properties:
+        evidenceId:
+          type: string
+          format: uuid
+        type:
+          type: string
+        materialStatus:
+          type: string
+        url:
+          type: string
+    ReviewDispositionRequest:
+      type: object
+      properties:
+        reasonCode:
+          $ref: '#/components/schemas/ReviewRejectReasonCode'
+        note:
+          type: [string, "null"]
+          maxLength: 500
+          description: "理由与证据编号；驳回必填（alias: reasonText）"
+    ReviewBatchDispositionRequest:
+      type: object
+      required: [ids, action]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: "点评 id 列表（alias: reviewIds）"
+          items:
+            type: string
+            format: uuid
+        action:
+          type: string
+          enum: [APPROVE, FOLD, REJECT]
+        reasonCode:
+          $ref: '#/components/schemas/ReviewRejectReasonCode'
+        note:
+          type: [string, "null"]
+          maxLength: 500
+          description: "alias: reasonText"
+    ReviewBatchDispositionResult:
+      type: object
+      properties:
+        total:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              reviewId:
+                type: string
+                format: uuid
+              success:
+                type: boolean
+              status:
+                type: [string, "null"]
+              code:
+                type: [integer, "null"]
+              message:
+                type: [string, "null"]
+    ReasonTemplateBundle:
+      type: object
+      properties:
+        approve:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonTemplate'
+        fold:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonTemplate'
+        reject:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonTemplate'
+    ReasonTemplate:
+      type: object
+      required: [reasonCode, text]
+      properties:
+        reasonCode:
+          type: string
+        text:
+          type: string
+
+    ReportCreateRequest:
+      type: object
+      required: [targetType, targetId, reasonCode]
+      properties:
+        targetType:
+          $ref: '#/components/schemas/ReportTargetType'
+        targetId:
+          type: string
+          format: uuid
+        reasonCode:
+          $ref: '#/components/schemas/ReportReasonCode'
+        detail:
+          type: string
+          maxLength: 500
+    ReportSubmitView:
+      type: object
+      required: [reportId, status]
+      properties:
+        reportId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        thresholdReached:
+          type: boolean
+    ReportItem:
+      type: object
+      required: [id, targetType, targetId, reasonCode, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        targetType:
+          $ref: '#/components/schemas/ReportTargetType'
+        targetId:
+          type: string
+          format: uuid
+        reasonCode:
+          $ref: '#/components/schemas/ReportReasonCode'
+        detail:
+          type: [string, "null"]
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        createdAt:
+          type: string
+          format: date-time
+        thresholdReached:
+          type: boolean
+    ReportPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReportItem'
+    ReportResolveRequest:
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/ReportStatus'
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        note:
+          type: string
+          maxLength: 500
+
+    AppealRequest:
+      type: object
+      required: [uscc, reviewId, contact, licenseFile, letterFile]
+      properties:
+        uscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        reviewId:
+          type: string
+          format: uuid
+        contact:
+          type: string
+          description: 企业联系人（加密存储）
+        licenseFile:
+          type: string
+          format: binary
+        letterFile:
+          type: string
+          format: binary
+        amountFlag:
+          type: boolean
+          description: 涉及金额是否 ≥1 万元（人工标注）
+        safetyFlag:
+          type: boolean
+          description: 是否涉及人身安全或性骚扰指控
+    ComplaintCreatedResult:
+      type: object
+      required: [complaintId, status]
+      properties:
+        complaintId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ComplaintStatus'
+
+    EnterpriseResponseSubmitRequest:
+      type: object
+      required: [ticketId, content]
+      properties:
+        ticketId:
+          type: string
+          maxLength: 64
+        content:
+          type: string
+          maxLength: 500
+    EnterpriseResponse:
+      type: object
+      required: [id, content]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reviewId:
+          type: [string, "null"]
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        label:
+          type: string
+          example: 企业回应
+    AdminResponseItem:
+      type: object
+      required: [id, content, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reviewId:
+          type: [string, "null"]
+          format: uuid
+        complaintId:
+          type: [string, "null"]
+          format: uuid
+        uscc:
+          type: string
+        content:
+          type: string
+        status:
+          $ref: '#/components/schemas/EnterpriseResponseStatus'
+        rejectReason:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        reviewedAt:
+          type: [string, "null"]
+          format: date-time
+    AdminResponsePage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AdminResponseItem'
+    ResponseRejectRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: "驳回原因码（alias: reasonText）"
+        reasonText:
+          type: string
+        note:
+          type: string
+
+    FeedbackSubmitRequest:
+      type: object
+      required: [content]
+      properties:
+        category:
+          $ref: '#/components/schemas/FeedbackCategory'
+        contact:
+          type: [string, "null"]
+          description: 联系方式（加密存储）
+        content:
+          type: string
+          minLength: 10
+          maxLength: 2000
+    FeedbackSubmitResult:
+      type: object
+      required: [ticketId, status]
+      properties:
+        ticketId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/FeedbackStatus'
+    FeedbackItem:
+      type: object
+      required: [id, content, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        category:
+          $ref: '#/components/schemas/FeedbackCategory'
+        contactMasked:
+          type: [string, "null"]
+        content:
+          type: string
+        status:
+          $ref: '#/components/schemas/FeedbackStatus'
+        responseNote:
+          type: [string, "null"]
+        respondedBy:
+          type: [string, "null"]
+          format: uuid
+        respondedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    FeedbackPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/FeedbackItem'
+    FeedbackReplyRequest:
+      type: object
+      required: [responseNote]
+      properties:
+        responseNote:
+          type: string
+          minLength: 5
+          maxLength: 1000
+        close:
+          type: boolean
+
+    TrackVisitRequest:
+      type: object
+      required: [visitorId, path]
+      properties:
+        visitorId:
+          type: string
+          maxLength: 64
+        path:
+          type: string
+          maxLength: 512
+        userAgent:
+          type: string
+          maxLength: 512
+
+    ComplaintDetail:
+      type: object
+      required: [id, reviewId, claimantUscc, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reviewId:
+          type: string
+          format: uuid
+        review:
+          $ref: '#/components/schemas/ReviewItem'
+        claimantUscc:
+          type: string
+        subjectVerified:
+          type: boolean
+        type:
+          type: [string, "null"]
+        amountFlag:
+          type: boolean
+        safetyFlag:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/ComplaintStatus'
+        deadline:
+          type: [string, "null"]
+          format: date-time
+        remainingSeconds:
+          type: integer
+        overdue:
+          type: boolean
+        enterpriseEvidenceNote:
+          type: [string, "null"]
+        userEvidenceNote:
+          type: [string, "null"]
+        resolution:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+        dualReviewRequired:
+          type: boolean
+        enterpriseGrade:
+          type: [string, "null"]
+        userGrade:
+          type: [string, "null"]
+        rulingReason:
+          type: [string, "null"]
+        citedMaterials:
+          type: [string, "null"]
+        ruleClause:
+          type: [string, "null"]
+        proposedResolution:
+          type: [string, "null"]
+        proposedBy:
+          type: [string, "null"]
+          format: uuid
+        proposedAt:
+          type: [string, "null"]
+          format: date-time
+        evidences:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComplaintEvidence'
+        materials:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComplaintMaterial'
+        responses:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnterpriseResponse'
+    ComplaintPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ComplaintDetail'
+
+    ComplaintEvidence:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        side:
+          type: string
+          description: ENTERPRISE / USER
+        grade:
+          type: [string, "null"]
+        note:
+          type: [string, "null"]
+        fileName:
+          type: string
+        materialStatus:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ComplaintMaterial:
+      type: object
+      properties:
+        materialType:
+          type: string
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+    MyComplaintView:
+      type: object
+      required: [complaintId, reviewId, status]
+      properties:
+        complaintId:
+          type: string
+          format: uuid
+        reviewId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ComplaintStatus'
+        subjectVerified:
+          type: boolean
+        deadline:
+          type: [string, "null"]
+          format: date-time
+        remainingSeconds:
+          type: integer
+        overdue:
+          type: boolean
+        userEvidenceSubmitted:
+          type: boolean
+        enterpriseEvidenceSubmitted:
+          type: boolean
+        userEvidenceNote:
+          type: [string, "null"]
+        enterpriseEvidenceNote:
+          type: [string, "null"]
+        resolution:
+          type: [string, "null"]
+        hasEnterpriseResponse:
+          type: boolean
+        enterpriseResponses:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnterpriseResponse'
+
+    ComplaintVerifyRequest:
+      type: object
+      required: [verified]
+      properties:
+        verified:
+          type: boolean
+        note:
+          type: [string, "null"]
+          maxLength: 500
+    ComplaintEvidenceRequest:
+      type: object
+      required: [party, file]
+      properties:
+        party:
+          type: string
+          enum: [ENTERPRISE, USER]
+        grade:
+          $ref: '#/components/schemas/EvidenceGrade'
+        note:
+          type: string
+          maxLength: 500
+        file:
+          type: string
+          format: binary
+    UserEvidenceRequest:
+      type: object
+      required: [file]
+      properties:
+        grade:
+          $ref: '#/components/schemas/EvidenceGrade'
+        note:
+          type: string
+          maxLength: 500
+        file:
+          type: string
+          format: binary
+    RulingRequest:
+      type: object
+      required: [result]
+      properties:
+        result:
+          $ref: '#/components/schemas/ComplaintResult'
+        enterpriseGrade:
+          $ref: '#/components/schemas/EvidenceGrade'
+        userGrade:
+          $ref: '#/components/schemas/EvidenceGrade'
+        reasonText:
+          type: string
+          maxLength: 2000
+        citedMaterialIds:
+          type: array
+          items:
+            type: string
+        ruleClause:
+          type: string
+          maxLength: 200
+        requiresDualReview:
+          type: boolean
+        secondReviewerId:
+          type: string
+          format: uuid
+    RulingResult:
+      type: object
+      required: [complaintId, status]
+      properties:
+        complaintId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/ComplaintStatus'
+        result:
+          type: [string, "null"]
+        pendingDualReview:
+          type: boolean
+        overdue:
+          type: boolean
+        rulingDeadline:
+          type: [string, "null"]
+          format: date-time
+    ComplaintBlocklistRequest:
+      type: object
+      required: [uscc, reason]
+      properties:
+        uscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        reason:
+          type: string
+          maxLength: 500
+        evidenceFile:
+          type: string
+        until:
+          type: [string, "null"]
+          format: date-time
+
+    CompanyUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        shortName:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 64
+        industry:
+          type: string
+          maxLength: 64
+        companyType:
+          type: string
+          maxLength: 64
+        status:
+          $ref: '#/components/schemas/CompanyStatus'
+        reason:
+          type: string
+          maxLength: 40
+        note:
+          type: string
+          maxLength: 500
+        ticketId:
+          type: string
+          maxLength: 64
+    MergeCompanyRequest:
+      type: object
+      required: [sourceUscc, targetUscc, reason]
+      properties:
+        sourceUscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        targetUscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        reason:
+          type: string
+          maxLength: 500
+        ticketId:
+          type: string
+          maxLength: 64
+    MergePathRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+        ticketId:
+          type: string
+          maxLength: 64
+
+    CompanyCandidate:
+      type: object
+      required: [id, name, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        city:
+          type: [string, "null"]
+        industry:
+          type: [string, "null"]
+        reporterUserId:
+          type: [string, "null"]
+          format: uuid
+        matchedUscc:
+          type: [string, "null"]
+        status:
+          $ref: '#/components/schemas/CandidateStatus'
+        createdAt:
+          type: string
+          format: date-time
+    CompanyCandidatePage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/CompanyCandidate'
+    CandidateResolveRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [MATCH, CREATE, REJECT]
+        uscc:
+          type: string
+          minLength: 18
+          maxLength: 18
+        name:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 64
+        industry:
+          type: string
+          maxLength: 64
+        note:
+          type: string
+          maxLength: 500
+        ticketId:
+          type: string
+          maxLength: 64
+
+    AdminUserListItem:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        phone:
+          type: [string, "null"]
+        phoneMasked:
+          type: [string, "null"]
+        realnameStatus:
+          $ref: '#/components/schemas/RealnameStatus'
+        contributionScore:
+          type: integer
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        createdAt:
+          type: string
+          format: date-time
+        alias:
+          type: [string, "null"]
+        approvedVerificationCount:
+          type: integer
+        publishedReviewCount:
+          type: integer
+    AdminUserDetail:
+      allOf:
+        - $ref: '#/components/schemas/AdminUserListItem'
+        - type: object
+          properties:
+            verifications:
+              type: array
+              items:
+                $ref: '#/components/schemas/VerificationSummary'
+            reviewStatusCounts:
+              type: object
+              additionalProperties:
+                type: integer
+    VerificationSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/VerificationStatus'
+        companyUscc:
+          type: string
+        periodStart:
+          type: [string, "null"]
+          format: date
+        periodEnd:
+          type: [string, "null"]
+          format: date
+        proofType:
+          $ref: '#/components/schemas/ProofType'
+        reviewedAt:
+          type: [string, "null"]
+          format: date-time
+    AdminUserPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AdminUserListItem'
+    BanUserRequest:
+      type: object
+      required: [ban, reason]
+      properties:
+        ban:
+          type: boolean
+        reason:
+          type: string
+          maxLength: 500
+    ContributionAdjustRequest:
+      type: object
+      required: [delta, reason]
+      properties:
+        delta:
+          type: integer
+          minimum: -1000
+          maximum: 1000
+        reason:
+          type: string
+          maxLength: 500
+        refId:
+          type: [string, "null"]
+          description: 幂等引用；缺省由服务端生成
+
+    ImportCreateRequest:
+      type: object
+      required: [city, industry]
+      properties:
+        city:
+          type: string
+          maxLength: 64
+        industry:
+          type: string
+          maxLength: 64
+        triggerType:
+          $ref: '#/components/schemas/ImportTriggerType'
+    ImportJob:
+      type: object
+      required: [id, city, industry, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        city:
+          type: string
+        industry:
+          type: string
+        triggerType:
+          $ref: '#/components/schemas/ImportTriggerType'
+        total:
+          type: integer
+        upserted:
+          type: integer
+        failed:
+          type: integer
+        status:
+          $ref: '#/components/schemas/ImportJobStatus'
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        detail:
+          type: [object, "null"]
+          additionalProperties: true
+    ImportJobPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ImportJob'
+
+    RankingItem:
+      type: object
+      required: [uscc, name, sampleCount]
+      properties:
+        rank:
+          type: integer
+        uscc:
+          type: string
+        name:
+          type: string
+        sampleCount:
+          type: integer
+        weightedScore:
+          type: [number, "null"]
+        lowScoreConcentration:
+          type: [number, "null"]
+        disputeRate:
+          type: [number, "null"]
+        score:
+          type: [number, "null"]
+        lowScoreRatio:
+          type: [number, "null"]
+          description: 低分集中度，0–1
+        disputeRatio:
+          type: [number, "null"]
+          description: 争议率，0–1
+    MetricDefinitions:
+      type: object
+      properties:
+        sampleSet:
+          type: string
+        weightedScore:
+          type: string
+        lowScoreConcentration:
+          type: string
+        disputeRate:
+          type: string
+    RankingPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            city:
+              type: [string, "null"]
+            industry:
+              type: [string, "null"]
+            type:
+              $ref: '#/components/schemas/RankingType'
+            algorithmVersion:
+              type: string
+            computedAt:
+              type: string
+              format: date-time
+            threshold:
+              type: [number, "null"]
+            params:
+              type: object
+              additionalProperties: true
+            metricDefinitions:
+              $ref: '#/components/schemas/MetricDefinitions'
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/RankingItem'
+
+    MetricView:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        value:
+          type: number
+        unit:
+          type: string
+        definition:
+          type: string
+        formula:
+          type: string
+        numerator:
+          type: [integer, "null"]
+          format: int64
+        denominator:
+          type: [integer, "null"]
+          format: int64
+    FunnelStage:
+      type: object
+      properties:
+        stage:
+          type: string
+        count:
+          type: integer
+          format: int64
+        conversionFromPrevious:
+          type: [number, "null"]
+    HealthRedLine:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        value:
+          type: number
+        threshold:
+          type: number
+        comparison:
+          type: string
+        triggered:
+          type: boolean
+        breached:
+          type: boolean
+        suggestion:
+          type: string
+    DashboardWindow:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        city:
+          type: [string, "null"]
+        industry:
+          type: [string, "null"]
+        timeZone:
+          type: string
+    DashboardResult:
+      type: object
+      properties:
+        window:
+          $ref: '#/components/schemas/DashboardWindow'
+        northstar:
+          $ref: '#/components/schemas/MetricView'
+        supply:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricView'
+        coverage:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricView'
+        quality:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricView'
+        demand:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricView'
+        ecology:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricView'
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricView'
+        funnel:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunnelStage'
+        healthRedLines:
+          type: array
+          items:
+            $ref: '#/components/schemas/HealthRedLine'
+        redLines:
+          type: array
+          items:
+            $ref: '#/components/schemas/HealthRedLine'
+        metricDefinitions:
+          type: object
+          additionalProperties:
+            type: string
+
+    AuditLogItem:
+      type: object
+      required: [id, action, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        actorId:
+          type: string
+          format: uuid
+        actorRole:
+          $ref: '#/components/schemas/AdminRole'
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        reasonCode:
+          type: [string, "null"]
+        detail:
+          type: [string, "null"]
+        beforeHash:
+          type: [string, "null"]
+        afterHash:
+          type: [string, "null"]
+        ip:
+          type: [string, "null"]
+        ticketId:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+    AuditLogPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/AuditLogItem'
+
+    MaterialUrlResult:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time

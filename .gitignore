@@ -1,0 +1,37 @@
+# ---- 通用 ----
+.DS_Store
+*.log
+.env
+.env.local
+.env.*.local
+node_modules/
+dist/
+.nuxt/
+.output/
+coverage/
+*.tsbuildinfo
+
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+*.war
+
+# ---- IDE ----
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ---- 运行时产物 ----
+storage/
+backend/storage/
+infra/data/
+logs/
+backups/
+
+# ---- 本地工具产物（不随仓库发布） ----
+.trae/
+.screenshots/
+.trae-html-share-packages/

@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: waibao-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-waibao}
+      POSTGRES_USER: ${DB_USER:-waibao}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-waibao_dev_password}
+      TZ: Asia/Shanghai
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - waibao_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-waibao} -d ${DB_NAME:-waibao}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  waibao_pgdata:
+    name: waibao_pgdata
